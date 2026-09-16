@@ -201,14 +201,31 @@ def test_back_to_back():
 
 
 def test_us_units():
-    h = new_hla('µs')
+    h = new_hla('us')
     frames = feed(h, build_rc_frame([992] * 16, status=0x02))
     txt = [f for f in frames if f.type == 'crsf_payload'][0].data['payload']
-    check('centre value renders ~1500us', 'CH1: 1500 µs' in txt, txt[:60])
+    check('centre value renders 1500 us', 'CH1: 1500 us' in txt, txt[:60])
+    check('no non-ascii in output', txt.isascii(), repr(txt[:60]))
+
+
+def test_legacy_unit_setting():
+    # a setting saved before the rename must still render sensibly
+    h = new_hla('ms')
+    frames = feed(h, build_rc_frame([992] * 16, status=0x02))
+    txt = [f for f in frames if f.type == 'crsf_payload'][0].data['payload']
+    check('legacy "ms" setting falls back to us', 'CH1: 1500 us' in txt, txt[:60])
+
+
+def test_both_units():
+    h = new_hla('Both')
+    frames = feed(h, build_rc_frame([992] * 16, status=0x02))
+    txt = [f for f in frames if f.type == 'crsf_payload'][0].data['payload']
+    check('Both shows value and us', 'CH1: 992 (1500 us)' in txt, txt[:60])
 
 
 for t in (test_16ch_plain, test_16ch_status, test_32ch, test_frame_length_byte,
-          test_bad_crc, test_signed_helpers, test_back_to_back, test_us_units):
+          test_bad_crc, test_signed_helpers, test_back_to_back, test_us_units,
+          test_legacy_unit_setting, test_both_units):
     print(t.__name__ + ':')
     t()
 

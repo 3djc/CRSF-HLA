@@ -109,7 +109,7 @@ class Hla(HighLevelAnalyzer):
     CRSF_ADDRESSES_BY_INT = {k[0]: v for k, v in CRSF_ADDRESSES.items()}
 
     # Settings:
-    channel_unit_options = ['µs', 'Digital Value', 'Both']
+    channel_unit_options = ['us', 'Digital Value', 'Both']
     channel_unit = ChoicesSetting(channel_unit_options)
 
     def __init__(self):
@@ -478,13 +478,14 @@ class Hla(HighLevelAnalyzer):
                         for idx, value in enumerate(channels, start=1):
                             # 'RC' value converted to microseconds
                             value_us = int((value * 1024 / 1639) + 881)
-                            if self.channel_unit == 'µs':
-                                parts.append('CH{}: {} µs'.format(idx, value_us))
-                            elif self.channel_unit == 'Digital Value':
+                            if self.channel_unit == 'Digital Value':
                                 parts.append('CH{}: {}'.format(idx, value))
-                            else:
-                                parts.append('CH{}: {} ({} µs)'.format(
+                            elif self.channel_unit == 'Both':
+                                parts.append('CH{}: {} ({} us)'.format(
                                     idx, value, value_us))
+                            else:
+                                # 'us', and any legacy saved value
+                                parts.append('CH{}: {} us'.format(idx, value_us))
                         payload_str = '[{}ch] '.format(
                             len(channels)) + ', '.join(parts)
                         status_str = self.describe_arming_status(status)
