@@ -40,10 +40,15 @@ class Hla(HighLevelAnalyzer):
     # CRSF frame types
     frame_types = {
         0x02: 'GPS',
+        0x03: 'GPS time',
         0x07: 'Vario',
         0x08: 'Battery sensor',
         0x09: 'Baro altitude',
+        0x0A: 'Airspeed',
         0x0B: 'Heart Beat',
+        0x0C: 'RPM',
+        0x0D: 'Temperature',
+        0x0E: 'Cells',
         0x10: 'OpenTX sync',
         0x14: 'Link statistics',
         # no plans of implmenting https://github.com/betaflight/betaflight/blob/master/src/main/rx/crsf.c#L170
@@ -79,7 +84,9 @@ class Hla(HighLevelAnalyzer):
         0x09: (4, 4),
         0x1E: (6, 6),
         0x29: (48, 48),
-        0x21: (4, 16)
+        0x21: (4, 16),
+        # 22 = 16ch, 23 = 16ch + EdgeTX status byte, 45 = 32ch + status byte
+        0x16: (22, 45)
     }
     # Protocol defines
     # https://github.com/ExpressLRS/ExpressLRS/blob/master/src/lib/CrsfProtocol/crsf_protocol.h#L119
@@ -98,8 +105,11 @@ class Hla(HighLevelAnalyzer):
                       b'\x8A': 'Reserved 1',
                       b'\xCA': 'Reserved 2'}
 
+    # Same table keyed by int, for addresses carried inside a payload
+    CRSF_ADDRESSES_BY_INT = {k[0]: v for k, v in CRSF_ADDRESSES.items()}
+
     # Settings:
-    channel_unit_options = ['ms', 'Digital Value', 'Both']
+    channel_unit_options = ['µs', 'Digital Value', 'Both']
     channel_unit = ChoicesSetting(channel_unit_options)
 
     def __init__(self):
@@ -133,16 +143,39 @@ class Hla(HighLevelAnalyzer):
         Little helper to get a signed value from a 2 bytes.
         '''
         if x > 32767:  # x > 2**15 -1
-            x -= 32768
+            x -= 65536
         return x
 
     def unsigned_to_signed_32(self, x):
         '''
         Little helper to get a signed value from a 4 bytes.
         '''
-        if x > 2**32-1:  # x > 2**15 -1
+        if x > 2**31-1:  # x > 2**31 -1
             x -= 2**32
         return x
+
+    def unpack_channels(self, data):
+        '''
+        Unpacks 11 bit channel values from a block of bytes (22 bytes -> 16 channels).
+        '''
+        bin_str = ''
+        for i in data:
+            bin_str += format(i, '08b')[::-1]
+        channels = []
+        for i in range(len(bin_str) // 11):
+            channels.append(int(bin_str[11 * i: 11 * i + 11][::-1], 2))
+        return channels
+
+    def describe_arming_status(self, status):
+        '''
+        EdgeTX status byte: bit 0 = armed (Switch mode), bit 1 = CH5 arming mode.
+        '''
+        if status is None:
+            return ''
+        if status & 0x02:
+            return 'Arming mode: CH5'
+        return 'Arming mode: Switch ({})'.format(
+            'armed' if status & 0x01 else 'disarmed')
 
     def decode(self, frame: AnalyzerFrame):
         '''
@@ -157,7 +190,6 @@ class Hla(HighLevelAnalyzer):
         try:
             # New frame
             if self.crsf_new_packet_start == None and frame.data['data'] in self.CRSF_ADDRESSES.keys() and self.dec_fsm == self.dec_fsm_e.Idle:
-                print('Sync byte detected.')
                 self.crsf_new_packet_start = frame.start_time
                 self.dec_fsm = self.dec_fsm_e.Length
                 dest = self.CRSF_ADDRESSES[frame.data['data']]
@@ -168,7 +200,6 @@ class Hla(HighLevelAnalyzer):
             if self.dec_fsm == self.dec_fsm_e.Length:
                 payload = int.from_bytes(
                     frame.data['data'], byteorder='little')
-                print('Length: {} bytes'.format(payload - 1))
                 self.crsf_frame_length = payload
                 self.dec_fsm = self.dec_fsm_e.Type
                 if self.crsf_frame_length < 2:  # error handling
@@ -186,7 +217,6 @@ class Hla(HighLevelAnalyzer):
                 })
 
                 elif self.crsf_frame_length > 63:
-                    print("length of packet cannot be greater than 64")
                     analyzerframe = AnalyzerFrame('crsf_length_byte', frame.start_time, frame.end_time, {
                         'length': str(payload),
                         'error': "length cannot be greater than 63"
@@ -214,20 +244,18 @@ class Hla(HighLevelAnalyzer):
                 self.crsf_frame_type = payload
                 self.dec_fsm = self.dec_fsm_e.Payload
                 self.crsf_frame_current_index += 1
-                min = 0
-                max = 100  # setting to be greater than max payload size
+                min_len = 0
+                max_len = 100  # setting to be greater than max payload size
                 if self.crsf_frame_type in self.frame_types_sizes.keys():
                     # if min max size defined then match length
-                    min, max = self.frame_types_sizes[self.crsf_frame_type]
+                    min_len, max_len = self.frame_types_sizes[self.crsf_frame_type]
 
                 if payload in self.frame_types.keys():
-                    print('Type: {}'.format(self.frame_types[payload]))
                     return AnalyzerFrame('crsf_type_byte', frame.start_time, frame.end_time, {
                         'type': self.frame_types[payload],
-                        'error': f"{f'''Length doesn't correspond to type'''if not min<= self.crsf_frame_length -2 <=max else ''}"
+                        'error': f"{f'''Length doesn't correspond to type'''if not min_len<= self.crsf_frame_length -2 <=max_len else ''}"
                     })
                 else:
-                    print('Type: Unrecognised')
                     # And initialize again for next frame
                     self.crsf_new_packet_start = None
                     self.dec_fsm = self.dec_fsm_e.Idle
@@ -310,8 +338,6 @@ class Hla(HighLevelAnalyzer):
                                        'Downlink RSSI: -{}dB, ' +
                                        'Downlink Link Quality: {}%, ' +
                                        'Downlink SNR: {}dB').format(*payload_signed)
-                        print(payload_signed)
-                        print(payload_str)
                         analyzerframe = AnalyzerFrame('crsf_payload', self.crsf_payload_start, self.crsf_payload_end, {
                             'payload': payload_str
                         })
@@ -361,7 +387,7 @@ class Hla(HighLevelAnalyzer):
                         gps_altitude = int(bin_str[96:112][::-1], 2)
                         satellities = int(bin_str[112:120][::-1], 2)
                         return AnalyzerFrame('crsf_payload', self.crsf_payload_start, self.crsf_payload_end, {
-                            'payload': f'Latitude (degrees): {latitude} ,Longitude (degrees): {longitude} ,Ground Speed (Km/h): {(groundspeed*10)} , Gps Heading (Degree): {gps_heading*100} ,Gps altitude: {gps_altitude-1000}m ,Satellites :{satellities}',
+                            'payload': f'Latitude (degrees): {latitude/1e7} ,Longitude (degrees): {longitude/1e7} ,Ground Speed (Km/h): {groundspeed/10} , Gps Heading (Degree): {gps_heading/100} ,Gps altitude: {gps_altitude-1000}m ,Satellites :{satellities}',
                             'error': "development pending"})
                     elif self.crsf_frame_type == 0x0B:  # HEART BEAT
                         # https://github.com/betaflight/betaflight/blob/master/src/main/telemetry/crsf.c#L288
@@ -370,31 +396,31 @@ class Hla(HighLevelAnalyzer):
                             # Format as bits and reverse order
                             # bcz transmitted data is little endian
                             bin_str += format(i, '08b')[::-1]
-                        address = format(int(bin_str[0:16][::-1], 2), "#x")
-                        if address in self.CRSF_ADDRESSES.keys():
+                        address = int(bin_str[0:16][::-1], 2)
+                        if address in self.CRSF_ADDRESSES_BY_INT.keys():
                             return AnalyzerFrame('crsf_payload', self.crsf_payload_start, self.crsf_payload_end, {
-                                'payload': f'Origin: {self.CRSF_ADDRESSES[address]}',
+                                'payload': f'Origin: {self.CRSF_ADDRESSES_BY_INT[address]}',
                                 'error': ""
                             })
                         else:
                             return AnalyzerFrame('crsf_payload', self.crsf_payload_start, self.crsf_payload_end, {
-                                'payload': f'Origin: {address} (unknown device address)',
+                                'payload': f'Origin: {format(address, "#x")} (unknown device address)',
                                 'error': "Unknown device"
                             })
                     elif self.crsf_frame_type == 0x28:  # Ping
                         # https://github.com/betaflight/betaflight/blob/master/src/main/telemetry/crsf.c#L300
-                        dest_address = format(self.crsf_payload[0], "#x")
-                        src_address = format(self.crsf_payload[1], "#x")
-                        if src_address in self.CRSF_ADDRESSES.keys() and dest_address in self.CRSF_ADDRESSES.keys():
+                        dest_address = self.crsf_payload[0]
+                        src_address = self.crsf_payload[1]
+                        if src_address in self.CRSF_ADDRESSES_BY_INT.keys() and dest_address in self.CRSF_ADDRESSES_BY_INT.keys():
                             return AnalyzerFrame('crsf_payload', self.crsf_payload_start, self.crsf_payload_end, {
-                                'payload': f'Destination: {self.CRSF_ADDRESSES[dest_address]} ,Origin: {self.CRSF_ADDRESSES[src_address]}',
+                                'payload': f'Destination: {self.CRSF_ADDRESSES_BY_INT[dest_address]} ,Origin: {self.CRSF_ADDRESSES_BY_INT[src_address]}',
                                 'error': "",
-                                'destination': f'{dest_address}'})
+                                'destination': f'{format(dest_address, "#x")}'})
                         else:
                             return AnalyzerFrame('crsf_payload', self.crsf_payload_start, self.crsf_payload_end, {
-                                'payload': f'Destination: {dest_address} ,Origin: {src_address} (unknown devices)',
+                                'payload': f'Destination: {format(dest_address, "#x")} ,Origin: {format(src_address, "#x")} (unknown devices)',
                                 'error': "Unknown device",
-                                'destination': f'{dest_address}'})
+                                'destination': f'{format(dest_address, "#x")}'})
 
                     elif self.crsf_frame_type == 0x1E:  # Attitude
                         # https://github.com/betaflight/betaflight/blob/master/src/main/telemetry/crsf.c#L337
@@ -413,9 +439,9 @@ class Hla(HighLevelAnalyzer):
                         roll = bin_str[16:32][::-1]
                         yaw = bin_str[32:48][::-1]  # but this is unsigned
 
-                        pitch = self.unsigned_to_signed_16(int(pitch, 2))*10000
-                        roll = self.unsigned_to_signed_16(int(roll, 2))*10000
-                        yaw = self.unsigned_to_signed_16(int(yaw, 2))*10000
+                        pitch = self.unsigned_to_signed_16(int(pitch, 2))/10000
+                        roll = self.unsigned_to_signed_16(int(roll, 2))/10000
+                        yaw = self.unsigned_to_signed_16(int(yaw, 2))/10000
                         return AnalyzerFrame('crsf_payload', self.crsf_payload_start, self.crsf_payload_end, {
                             'payload': f'Pitch(rad): {pitch} ,Roll(rad): {roll} ,Yaw(rad): {yaw}',
                             'error': ""})
@@ -426,8 +452,8 @@ class Hla(HighLevelAnalyzer):
                         origin = self.crsf_payload[1]
                         index = 2
                         device_name = ''
-                        while self.crsf_payload[index] != "\0" and index < self.crsf_frame_length - 2:
-                            device_name += self.crsf_payload[index]
+                        while index < len(self.crsf_payload) and self.crsf_payload[index] != 0:
+                            device_name += chr(self.crsf_payload[index])
                             index = index+1
                         index = index + 12 + 1  # 12 null bytes are sent after null terminated string
                         device_info_paramter_count = self.crsf_payload[index]
@@ -436,47 +462,34 @@ class Hla(HighLevelAnalyzer):
                             'payload': f'Destination: {format(dest,"#x")} ,Origin: {format(origin,"#x")} ,Device Name: {device_name} ,Device info parameter count: {device_info_paramter_count} ,Device info paramter version: {device_info_paramter_version}',
                             'error': ""})
                     elif self.crsf_frame_type == 0x16:  # RC channels packed
-                        # https://github.com/betaflight/betaflight/blob/master/src/main/rx/crsf.c#L481
-                        # https://github.com/betaflight/betaflight/blob/master/src/main/rx/crsf.c#L109
-                        # 11 bits per channel, 16 channels, 176 bits (22 bytes) total
-                        bin_str = ''
-                        channels = []
-                        for i in self.crsf_payload:
-                            # Format as bits and reverse order
-                            bin_str += format(i, '08b')[::-1]
-                        print(bin_str)
-                        for i in range(16):
-                            # 'RC' value
-                            value = int(
-                                bin_str[0 + 11 * i: 11 + 11 * i][::-1], 2)
-                            # Converted to milliseconds
-                            value_ms = int((value * 1024 / 1639) + 881)
-                            if self.channel_unit in self.channel_unit_options:
-                                if self.channel_unit == 'ms':
-                                    channels.append(value_ms)
-                                elif self.channel_unit == 'Digital Value':
-                                    channels.append(value)
-                                else:
-                                    channels.append(value)
-                                    channels.append(value_ms)
-                        # print(channels)
-                        if self.channel_unit in self.channel_unit_options:
-                            if self.channel_unit == 'ms':
-                                payload_str = ('CH1: {} ms, CH2: {} ms, CH3: {} ms, CH4: {} ms, ' +
-                                               'CH5: {} ms, CH6: {} ms, CH7: {} ms, CH8: {} ms, ' +
-                                               'CH9: {} ms, CH10: {} ms, CH11: {} ms, CH12: {} ms, ' +
-                                               'CH13: {} ms, CH14: {} ms, CH15: {} ms, CH16: {} ms').format(*channels)
+                        # 11 bits per channel, 16 channels per block (22 bytes).
+                        # EdgeTX appends a status byte after the first block and,
+                        # in 32 channel mode, a second block after that:
+                        #   22          -> 16ch (plain CRSF)
+                        #   22 + 1      -> 16ch + status (EdgeTX)
+                        #   22 + 1 + 22 -> 32ch + status (EdgeTX extended 0x16)
+                        data = self.crsf_payload
+                        status = data[22] if len(data) >= 23 else None
+                        channels = self.unpack_channels(data[0:22])
+                        if len(data) >= 45:
+                            channels += self.unpack_channels(data[23:45])
+
+                        parts = []
+                        for idx, value in enumerate(channels, start=1):
+                            # 'RC' value converted to microseconds
+                            value_us = int((value * 1024 / 1639) + 881)
+                            if self.channel_unit == 'µs':
+                                parts.append('CH{}: {} µs'.format(idx, value_us))
                             elif self.channel_unit == 'Digital Value':
-                                payload_str = ('CH1: {} , CH2: {} , CH3: {} , CH4: {} , ' +
-                                               'CH5: {} , CH6: {} , CH7: {} , CH8: {} , ' +
-                                               'CH9: {} , CH10: {} , CH11: {} , CH12: {} , ' +
-                                               'CH13: {} , CH14: {} , CH15: {} , CH16: {} ').format(*channels)
+                                parts.append('CH{}: {}'.format(idx, value))
                             else:
-                                payload_str = ('CH1: {} ({} ms), CH2: {} ({} ms), CH3: {} ({} ms), CH4: {} ({} ms), ' +
-                                               'CH5: {} ({} ms), CH6: {} ({} ms), CH7: {} ({} ms), CH8: {} ({} ms), ' +
-                                               'CH9: {} ({} ms), CH10: {} ({} ms), CH11: {} ({} ms), CH12: {} ({} ms), ' +
-                                               'CH13: {} ({} ms), CH14: {} ({} ms), CH15: {} ({} ms), CH16: {} ({} ms)').format(*channels)
-                        print(payload_str)
+                                parts.append('CH{}: {} ({} µs)'.format(
+                                    idx, value, value_us))
+                        payload_str = '[{}ch] '.format(
+                            len(channels)) + ', '.join(parts)
+                        status_str = self.describe_arming_status(status)
+                        if status_str:
+                            payload_str += ' | ' + status_str
                         analyzerframe = AnalyzerFrame('crsf_payload', self.crsf_payload_start, self.crsf_payload_end, {
                             'payload': payload_str
                         })
@@ -518,7 +531,6 @@ class Hla(HighLevelAnalyzer):
                     self.crsf_payload_end = None
                     return analyzerframe
                 else:
-                    print("unknown error")
                     analyzerframe = AnalyzerFrame('crsf_error', frame.start_time, frame.end_time, {
                         'error': "Something Went Wrong"
                     })
@@ -562,7 +574,7 @@ class Hla(HighLevelAnalyzer):
         packet : list of bytes on which CRC calculation needs to be done
         bytes : number of bytes on which CRC calculation needs to be done
         gen_poly(default = 0xd5) : Polynomial to use for calculating CRC
-        start_from_byte(default = 2) : Start CRC calculation from which byte 
+        start_from_byte(default = 0) : Start CRC calculation from which byte 
 
         Note: Slow for live Analysis.
         '''
@@ -592,7 +604,6 @@ class Hla(HighLevelAnalyzer):
             number_of_bits_left = number_of_bits_left - 1
             if is_MSB_one == 0b10000000:
                 dividend = (dividend ^ gen_poly)
-                print(dividend)
             else:
                 dividend = dividend
             # if bit aligning with MSB of gen_poly is 1 then do XOR
