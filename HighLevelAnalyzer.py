@@ -1,5 +1,10 @@
-# Crossfire High Level Analyzer (CRSF-HLA)
+# CRSF Frame Parser
+# Saleae Logic 2 High Level Analyzer for the Crossfire (CRSF) protocol, as used
+# by TBS Crossfire, Tracer, ExpressLRS and EdgeTX.
+#
 # Copyright 2022, Max Gröning
+# Copyright 2023-2024, Ansh Chawla
+# Copyright 2026, 3djc
 # SPDX-License-Identifier: Apache-2.0
 
 import enum
