@@ -587,6 +587,42 @@ class Hla(HighLevelAnalyzer):
                         analyzerframe = AnalyzerFrame('crsf_payload', self.crsf_payload_start, self.crsf_payload_end, {
                             'payload': payload_str
                         })
+                    elif self.crsf_frame_type == 0x32:  # Command
+                        # destination, origin, command realm, command, then any
+                        # arguments and a command CRC using polynomial 0xBA.
+                        # The frame CRC that follows covers this one as well.
+                        d = bytes(self.crsf_payload)
+                        dest = self.CRSF_ADDRESSES_BY_INT.get(
+                            d[0], format(d[0], '#x')) if len(d) > 0 else '?'
+                        origin = self.CRSF_ADDRESSES_BY_INT.get(
+                            d[1], format(d[1], '#x')) if len(d) > 1 else '?'
+                        realm = d[2] if len(d) > 2 else None
+                        cmd = d[3] if len(d) > 3 else None
+                        if realm == 0x10:  # CRSF command realm
+                            if cmd == 0x05 and len(d) > 4:
+                                what = 'Model select, ID {}'.format(d[4])
+                            elif cmd == 0x01:
+                                what = 'Bind'
+                            else:
+                                what = 'CRSF command {}'.format(
+                                    format(cmd, '#x') if cmd is not None else '?')
+                        else:
+                            what = 'Realm {} ,command {}'.format(
+                                format(realm, '#x') if realm is not None else '?',
+                                format(cmd, '#x') if cmd is not None else '?')
+                        # the command CRC is the last payload byte and covers
+                        # the frame type plus everything before it
+                        cmd_crc = self.calCRC(
+                            packet=[self.crsf_frame_type] + list(d),
+                            bytes=len(d) + 1, gen_poly=0xBA)
+                        payload_str = ('{} ,destination {} ,origin {} ,'
+                                       'command CRC {}').format(
+                            what, dest, origin,
+                            'Pass' if cmd_crc == 0 else 'Fail')
+                        analyzerframe = AnalyzerFrame('crsf_payload', self.crsf_payload_start, self.crsf_payload_end, {
+                            'payload': payload_str,
+                            'error': '' if cmd_crc == 0 else 'command CRC Fail'
+                        })
                     elif self.crsf_frame_type == 0x17:  # Subset RC channels
                         # Configuration byte: bits 0-4 the first channel number,
                         # bits 5-6 the resolution, bit 7 reserved. The channel

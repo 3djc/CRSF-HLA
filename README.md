@@ -43,12 +43,12 @@ Full decoding of:
 * Temperature (0x0D)
 * Cells and voltage array (0x0E)
 * Link statistics Rx (0x1C) and Tx (0x1D)
+* Command (0x32), including model select and bind, with the command CRC checked
 
 The standalone sync type (0x10) is recognised but not decoded; in practice the sync is
-carried inside a Radio ID (0x3A) frame, which is decoded. The remaining 11 named types
-are the parameter protocol (0x2A to 0x2D, 0x32) and the KISS, MSP and ArduPilot
-passthrough frames; they are reported by name with the payload left undecoded and no
-error flagged.
+carried inside a Radio ID (0x3A) frame, which is decoded. The remaining named types are
+the parameter protocol (0x2A to 0x2D) and the KISS, MSP and ArduPilot passthrough
+frames; they are reported by name with the payload left undecoded and no error flagged.
 
 Field layouts and scaling follow EdgeTX's own parser in
 `radio/src/telemetry/crossfire.cpp`, and every decoder has a test built from values
@@ -93,6 +93,12 @@ It covers 16 and 32 channel frames, the status byte, CRC pass and fail, unit sel
 and back to back frames.
 
 ## Changelog 📋
+
+### 1.5.0
+
+* Decode Command (0x32), which carries the model ID frame the radio sends at startup,
+  and the bind command. A command frame holds a second CRC, over the command itself and
+  using polynomial 0xBA, which is now checked separately from the frame CRC
 
 ### 1.4.0
 

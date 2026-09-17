@@ -495,6 +495,62 @@ def test_subset_rc_does_not_break_sync():
     check('subset: type recognised', 'Unrecognised' not in types, str(types))
 
 
+def build_model_id_frame(model_id=42):
+    """Exactly what EdgeTX createCrossfireModelIDFrame() emits."""
+    body = bytes([0x32, 0xEE, 0xEA, 0x10, 0x05, model_id])
+    body += bytes([crc8(body, 0xBA)])          # command CRC
+    return bytes([0xC8, len(body) + 1]) + body + bytes([crc8(body)])
+
+
+def build_bind_frame():
+    body = bytes([0x32, 0xEE, 0xEA, 0x10, 0x01])
+    body += bytes([crc8(body, 0xBA)])
+    return bytes([0xC8, len(body) + 1]) + body + bytes([crc8(body)])
+
+
+def test_model_id_frame():
+    frame = build_model_id_frame(42)
+    check('model id: frame is 10 bytes', len(frame) == 10, str(len(frame)))
+    check('model id: length byte is 8', frame[1] == 8, str(frame[1]))
+
+    frames = feed(new_hla(), frame)
+    pay = [f for f in frames if f.type == 'crsf_payload']
+    crc = [f for f in frames if f.type == 'crsf_CRC']
+    types = [f.data.get('type') for f in frames if f.type == 'crsf_type_byte']
+    check('model id: type recognised as Command', 'Command' in types, str(types))
+    check('model id: frame CRC passes', crc and crc[0].data['crccheck'] == 'Pass')
+    txt = pay[0].data['payload'] if pay else '(none)'
+    check('model id: decoded as model select', 'Model select, ID 42' in txt, txt)
+    check('model id: destination decoded', 'CRSF Transmitter' in txt, txt)
+    check('model id: origin decoded', 'Radio Transmitter' in txt, txt)
+    check('model id: command CRC passes', 'command CRC Pass' in txt, txt)
+    check('model id: not left undecoded', 'not decoded' not in txt, txt)
+    check('model id: no error', not pay[0].data.get('error'),
+          repr(pay[0].data.get('error')))
+
+
+def test_bind_frame():
+    frames = feed(new_hla(), build_bind_frame())
+    txt = [f for f in frames if f.type == 'crsf_payload'][0].data['payload']
+    check('bind: decoded as bind', txt.startswith('Bind'), txt)
+    check('bind: command CRC passes', 'command CRC Pass' in txt, txt)
+
+
+def test_command_crc_failure_is_reported():
+    f = bytearray(build_model_id_frame(7))
+    f[8] ^= 0xFF                      # corrupt the command CRC only
+    f[9] = crc8(bytes(f[2:9]))        # keep the frame CRC valid
+    frames = feed(new_hla(), bytes(f))
+    pay = [x for x in frames if x.type == 'crsf_payload'][0]
+    crc = [x for x in frames if x.type == 'crsf_CRC']
+    check('command crc: frame CRC still passes',
+          crc and crc[0].data['crccheck'] == 'Pass')
+    check('command crc: inner CRC reported as failed',
+          'command CRC Fail' in pay.data['payload'], pay.data['payload'])
+    check('command crc: error flagged', pay.data.get('error') == 'command CRC Fail',
+          repr(pay.data.get('error')))
+
+
 for t in (test_16ch_plain, test_16ch_status, test_32ch, test_frame_length_byte,
           test_bad_crc, test_signed_helpers, test_back_to_back, test_us_units,
           test_legacy_unit_setting, test_both_units, test_radio_id_sync,
@@ -507,7 +563,9 @@ for t in (test_16ch_plain, test_16ch_status, test_32ch, test_frame_length_byte,
           test_link_statistics_rx, test_link_statistics_tx,
           test_link_statistics_tx_power_table, test_subset_rc_11bit,
           test_subset_rc_all_resolutions, test_subset_rc_start_channel,
-          test_subset_rc_raw_units, test_subset_rc_does_not_break_sync):
+          test_subset_rc_raw_units, test_subset_rc_does_not_break_sync,
+          test_model_id_frame, test_bind_frame,
+          test_command_crc_failure_is_reported):
     print(t.__name__ + ':')
     t()
 
