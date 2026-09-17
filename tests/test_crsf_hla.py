@@ -306,12 +306,131 @@ def test_undecoded_type_is_not_an_error():
           repr(f.data.get('error')))
 
 
+def test_vario():
+    frames = feed(new_hla(), build_frame(0x07, (-250).to_bytes(2, 'big', signed=True)))
+    txt = [f for f in frames if f.type == 'crsf_payload'][0].data['payload']
+    check('vario: -2.5 m/s', '-2.5 m/s' in txt, txt)
+
+
+def test_gps_time():
+    payload = (2026).to_bytes(2, 'big') + bytes([9, 17, 14, 30, 45]) + \
+        (123).to_bytes(2, 'big')
+    frames = feed(new_hla(), build_frame(0x03, payload))
+    txt = [f for f in frames if f.type == 'crsf_payload'][0].data['payload']
+    check('gps time: formatted', '2026-09-17 14:30:45.123' in txt, txt)
+
+
+def test_baro_altitude_metres_form():
+    # bit 15 set -> remainder is metres
+    frames = feed(new_hla(), build_frame(0x09, (0x8000 | 500).to_bytes(2, 'big')))
+    txt = [f for f in frames if f.type == 'crsf_payload'][0].data['payload']
+    check('baro: metres form', 'Altitude: 500 m' in txt, txt)
+
+
+def test_baro_altitude_decimetre_form():
+    # bit 15 clear -> decimetres with a 10000 offset
+    frames = feed(new_hla(), build_frame(0x09, (11234).to_bytes(2, 'big')))
+    txt = [f for f in frames if f.type == 'crsf_payload'][0].data['payload']
+    check('baro: decimetre form', 'Altitude: 123.4 m' in txt, txt)
+
+
+def test_baro_with_elrs_vario():
+    payload = (11234).to_bytes(2, 'big') + (250).to_bytes(2, 'big', signed=True)
+    frames = feed(new_hla(), build_frame(0x09, payload))
+    txt = [f for f in frames if f.type == 'crsf_payload'][0].data['payload']
+    check('baro: altitude kept', 'Altitude: 123.4 m' in txt, txt)
+    check('baro: elrs vario 2.5 m/s', '2.5 m/s' in txt, txt)
+
+
+def test_baro_with_tbs_vario():
+    # one extra byte -> exponential vario scale
+    payload = (0x8000 | 100).to_bytes(2, 'big') + bytes([30])
+    frames = feed(new_hla(), build_frame(0x09, payload))
+    txt = [f for f in frames if f.type == 'crsf_payload'][0].data['payload']
+    check('baro: tbs vario 1.18 m/s', '1.18 m/s' in txt, txt)
+
+
+def test_airspeed():
+    frames = feed(new_hla(), build_frame(0x0A, (1234).to_bytes(2, 'big')))
+    txt = [f for f in frames if f.type == 'crsf_payload'][0].data['payload']
+    check('airspeed: 123.4 km/h', '123.4 km/h' in txt, txt)
+
+
+def test_rpm():
+    payload = bytes([2]) + (1000).to_bytes(3, 'big', signed=True) + \
+        (-500).to_bytes(3, 'big', signed=True)
+    frames = feed(new_hla(), build_frame(0x0C, payload))
+    txt = [f for f in frames if f.type == 'crsf_payload'][0].data['payload']
+    check('rpm: source', 'source 2' in txt, txt)
+    check('rpm: both values', '1000' in txt and '-500' in txt, txt)
+
+
+def test_temperature():
+    payload = bytes([1]) + (250).to_bytes(2, 'big', signed=True) + \
+        (-100).to_bytes(2, 'big', signed=True)
+    frames = feed(new_hla(), build_frame(0x0D, payload))
+    txt = [f for f in frames if f.type == 'crsf_payload'][0].data['payload']
+    check('temp: 25.0 C', '25.0 C' in txt, txt)
+    check('temp: -10.0 C', '-10.0 C' in txt, txt)
+
+
+def test_cells():
+    payload = bytes([0]) + (3850).to_bytes(2, 'big') + (3900).to_bytes(2, 'big')
+    frames = feed(new_hla(), build_frame(0x0E, payload))
+    txt = [f for f in frames if f.type == 'crsf_payload'][0].data['payload']
+    check('cells: labelled as cells', txt.startswith('Cells'), txt)
+    check('cells: 3.85 V', '3.85 V' in txt, txt)
+    check('cells: 3.9 V', '3.9 V' in txt, txt)
+
+
+def test_voltage_array():
+    # source id >= 128 means a voltage array rather than cells
+    payload = bytes([200]) + (12600).to_bytes(2, 'big')
+    frames = feed(new_hla(), build_frame(0x0E, payload))
+    txt = [f for f in frames if f.type == 'crsf_payload'][0].data['payload']
+    check('voltage array: labelled', txt.startswith('Voltages'), txt)
+    check('voltage array: 12.6 V', '12.6 V' in txt, txt)
+
+
+def test_link_statistics_rx():
+    frames = feed(new_hla(), build_frame(0x1C, bytes([70, 85, 99, 0xFB, 20])))
+    txt = [f for f in frames if f.type == 'crsf_payload'][0].data['payload']
+    check('link rx: rssi dB', '-70 dB' in txt, txt)
+    check('link rx: rssi percent', '85%' in txt, txt)
+    check('link rx: link quality', '99%' in txt, txt)
+    check('link rx: negative snr', '-5 dB' in txt, txt)
+    check('link rx: uplink power', '20 dBm' in txt, txt)
+
+
+def test_link_statistics_tx():
+    frames = feed(new_hla(), build_frame(0x1D, bytes([65, 90, 100, 0xFD, 25, 25])))
+    txt = [f for f in frames if f.type == 'crsf_payload'][0].data['payload']
+    check('link tx: rssi dB', '-65 dB' in txt, txt)
+    check('link tx: negative snr', '-3 dB' in txt, txt)
+    check('link tx: rate x10', '250 Hz' in txt, txt)
+
+
+def test_link_statistics_tx_power_table():
+    """0x14 sends TX power as a table index, not milliwatts."""
+    # index 3 == 100 mW
+    payload = bytes([70, 75, 99, 5, 0, 2, 3, 60, 98, 4])
+    frames = feed(new_hla(), build_frame(0x14, payload))
+    txt = [f for f in frames if f.type == 'crsf_payload'][0].data['payload']
+    check('link stats: power index mapped to mW', '100 mW' in txt, txt)
+    check('link stats: not the raw index', '3 mW' not in txt, txt)
+
+
 for t in (test_16ch_plain, test_16ch_status, test_32ch, test_frame_length_byte,
           test_bad_crc, test_signed_helpers, test_back_to_back, test_us_units,
           test_legacy_unit_setting, test_both_units, test_radio_id_sync,
           test_gps_big_endian, test_gps_negative_coordinates,
           test_attitude_big_endian, test_heart_beat_address,
-          test_undecoded_type_is_not_an_error):
+          test_undecoded_type_is_not_an_error, test_vario, test_gps_time,
+          test_baro_altitude_metres_form, test_baro_altitude_decimetre_form,
+          test_baro_with_elrs_vario, test_baro_with_tbs_vario, test_airspeed,
+          test_rpm, test_temperature, test_cells, test_voltage_array,
+          test_link_statistics_rx, test_link_statistics_tx,
+          test_link_statistics_tx_power_table):
     print(t.__name__ + ':')
     t()
 

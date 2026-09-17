@@ -8,6 +8,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import enum
+import math
 from saleae.analyzers import HighLevelAnalyzer, AnalyzerFrame, StringSetting, NumberSetting, ChoicesSetting
 
 
@@ -112,6 +113,9 @@ class Hla(HighLevelAnalyzer):
 
     # Same table keyed by int, for addresses carried inside a payload
     CRSF_ADDRESSES_BY_INT = {k[0]: v for k, v in CRSF_ADDRESSES.items()}
+
+    # Uplink TX power is sent as an index into this table, in mW
+    TX_POWER_MW = [0, 10, 25, 100, 500, 1000, 2000, 250, 50]
 
     # Settings:
     channel_unit_options = ['us', 'Digital Value', 'Both']
@@ -332,6 +336,9 @@ class Hla(HighLevelAnalyzer):
                         # ... download SNR are signed.
                         payload_signed[9] = self.unsigned_to_signed_8(
                             payload_signed[9])
+                        # uplink TX power is an index into a table of mW values
+                        payload_signed[6] = self.TX_POWER_MW[payload_signed[6]] \
+                            if payload_signed[6] < len(self.TX_POWER_MW) else 0
                         # One byte per entry...
                         payload_str = ('Uplink RSSI 1: -{}dB, ' +
                                        'Uplink RSSI 2: -{}dB, ' +
@@ -442,6 +449,108 @@ class Hla(HighLevelAnalyzer):
                         return AnalyzerFrame('crsf_payload', self.crsf_payload_start, self.crsf_payload_end, {
                             'payload': f'Destination: {format(dest,"#x")} ,Origin: {format(origin,"#x")} ,Device Name: {device_name} ,Device info parameter count: {device_info_paramter_count} ,Device info paramter version: {device_info_paramter_version}',
                             'error': ""})
+                    elif self.crsf_frame_type == 0x07:  # Vario
+                        # int16 vertical speed in cm/s
+                        vspd = int.from_bytes(
+                            bytes(self.crsf_payload[0:2]), 'big', signed=True)
+                        analyzerframe = AnalyzerFrame('crsf_payload', self.crsf_payload_start, self.crsf_payload_end, {
+                            'payload': 'Vertical speed: {} m/s'.format(vspd / 100)
+                        })
+                    elif self.crsf_frame_type == 0x03:  # GPS time
+                        # uint16 year, then month, day, hour, minute, second,
+                        # and a uint16 millisecond
+                        d = bytes(self.crsf_payload)
+                        year = int.from_bytes(d[0:2], 'big')
+                        ms = int.from_bytes(d[7:9], 'big') if len(d) >= 9 else 0
+                        analyzerframe = AnalyzerFrame('crsf_payload', self.crsf_payload_start, self.crsf_payload_end, {
+                            'payload': 'GPS time: {:04d}-{:02d}-{:02d} {:02d}:{:02d}:{:02d}.{:03d}'.format(
+                                year, d[2], d[3], d[4], d[5], d[6], ms)
+                        })
+                    elif self.crsf_frame_type == 0x09:  # Baro altitude
+                        # Bit 15 set: the remainder is metres. Otherwise the
+                        # value is decimetres with a 10000 offset. A third byte
+                        # is a TBS vario, four or more an ELRS vario.
+                        d = bytes(self.crsf_payload)
+                        raw = int.from_bytes(d[0:2], 'big')
+                        if raw & 0x8000:
+                            altitude = raw & 0x7FFF
+                        else:
+                            altitude = (raw - 10000) / 10
+                        payload_str = 'Altitude: {} m'.format(round(altitude, 2))
+                        if len(d) == 3:
+                            v = self.unsigned_to_signed_8(d[2])
+                            sign = -1 if v < 0 else 1
+                            # exponential scale, see EdgeTX crossfire.cpp
+                            vspd = ((math.exp(abs(v) * 0.026) - 1) * 100) * sign
+                            payload_str += ' ,Vertical speed: {} m/s'.format(
+                                round(vspd / 100, 2))
+                        elif len(d) > 3:
+                            vspd = int.from_bytes(d[2:4], 'big', signed=True)
+                            payload_str += ' ,Vertical speed: {} m/s'.format(
+                                vspd / 100)
+                        analyzerframe = AnalyzerFrame('crsf_payload', self.crsf_payload_start, self.crsf_payload_end, {
+                            'payload': payload_str
+                        })
+                    elif self.crsf_frame_type == 0x0A:  # Airspeed
+                        # uint16 in 0.1 km/h
+                        speed = int.from_bytes(
+                            bytes(self.crsf_payload[0:2]), 'big')
+                        analyzerframe = AnalyzerFrame('crsf_payload', self.crsf_payload_start, self.crsf_payload_end, {
+                            'payload': 'Airspeed: {} km/h'.format(speed / 10)
+                        })
+                    elif self.crsf_frame_type == 0x0C:  # RPM
+                        # source id, then one or more 24 bit signed values
+                        d = bytes(self.crsf_payload)
+                        values = [int.from_bytes(d[1 + i * 3:4 + i * 3], 'big',
+                                                 signed=True)
+                                  for i in range((len(d) - 1) // 3)]
+                        analyzerframe = AnalyzerFrame('crsf_payload', self.crsf_payload_start, self.crsf_payload_end, {
+                            'payload': 'RPM source {}: {}'.format(
+                                d[0], ', '.join(str(v) for v in values))
+                        })
+                    elif self.crsf_frame_type == 0x0D:  # Temperature
+                        # source id, then one or more int16 in 0.1 degrees
+                        d = bytes(self.crsf_payload)
+                        values = [int.from_bytes(d[1 + i * 2:3 + i * 2], 'big',
+                                                 signed=True) / 10
+                                  for i in range((len(d) - 1) // 2)]
+                        analyzerframe = AnalyzerFrame('crsf_payload', self.crsf_payload_start, self.crsf_payload_end, {
+                            'payload': 'Temperature source {}: {}'.format(
+                                d[0], ', '.join('{} C'.format(v) for v in values))
+                        })
+                    elif self.crsf_frame_type == 0x0E:  # Cells / voltage array
+                        # source id below 128 means cell voltages, at or above
+                        # means a voltage array. Values are uint16 millivolts.
+                        d = bytes(self.crsf_payload)
+                        values = [int.from_bytes(d[1 + i * 2:3 + i * 2], 'big') / 1000
+                                  for i in range((len(d) - 1) // 2)]
+                        label = 'Cells' if d[0] < 128 else 'Voltages'
+                        analyzerframe = AnalyzerFrame('crsf_payload', self.crsf_payload_start, self.crsf_payload_end, {
+                            'payload': '{} source {}: {}'.format(
+                                label, d[0],
+                                ', '.join('{} V'.format(v) for v in values))
+                        })
+                    elif self.crsf_frame_type == 0x1C:  # Link statistics Rx
+                        d = bytes(self.crsf_payload)
+                        analyzerframe = AnalyzerFrame('crsf_payload', self.crsf_payload_start, self.crsf_payload_end, {
+                            'payload': ('Downlink RSSI: -{} dB ,RSSI: {}% ,'
+                                        'Link Quality: {}% ,SNR: {} dB ,'
+                                        'Uplink power: {} dBm').format(
+                                d[0], d[1], d[2],
+                                self.unsigned_to_signed_8(d[3]), d[4])
+                        })
+                    elif self.crsf_frame_type == 0x1D:  # Link statistics Tx
+                        d = bytes(self.crsf_payload)
+                        payload_str = ('Uplink RSSI: -{} dB ,RSSI: {}% ,'
+                                       'Link Quality: {}% ,SNR: {} dB ,'
+                                       'Downlink power: {} dBm').format(
+                            d[0], d[1], d[2],
+                            self.unsigned_to_signed_8(d[3]), d[4])
+                        if len(d) >= 6:
+                            payload_str += ' ,Uplink rate: {} Hz'.format(d[5] * 10)
+                        analyzerframe = AnalyzerFrame('crsf_payload', self.crsf_payload_start, self.crsf_payload_end, {
+                            'payload': payload_str
+                        })
                     elif self.crsf_frame_type == 0x3A:  # Radio ID
                         # Extended header frame: destination, origin, sub type.
                         # Sub type 0x10 is the timing correction frame, holding

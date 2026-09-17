@@ -34,11 +34,24 @@ Full decoding of:
 * Attitude (0x1E)
 * Device info (0x29)
 * Radio ID (0x3A), including the timing sync sub frame
+* Vario (0x07)
+* Baro altitude (0x09), both encodings, with TBS or ELRS vario when present
+* GPS time (0x03)
+* Airspeed (0x0A)
+* RPM (0x0C)
+* Temperature (0x0D)
+* Cells and voltage array (0x0E)
+* Link statistics Rx (0x1C) and Tx (0x1D)
 
 The standalone sync type (0x10) is recognised but not decoded; in practice the sync is
-carried inside a Radio ID (0x3A) frame, which is decoded. A further 20 frame types are
-named in the type table, so they are reported by name with the payload left undecoded
-and no error flagged.
+carried inside a Radio ID (0x3A) frame, which is decoded. The remaining 11 named types
+are the parameter protocol (0x2A to 0x2D, 0x32) and the KISS, MSP and ArduPilot
+passthrough frames; they are reported by name with the payload left undecoded and no
+error flagged.
+
+Field layouts and scaling follow EdgeTX's own parser in
+`radio/src/telemetry/crossfire.cpp`, and every decoder has a test built from values
+checked against it.
 
 It also provides:
 
@@ -79,6 +92,13 @@ It covers 16 and 32 channel frames, the status byte, CRC pass and fail, unit sel
 and back to back frames.
 
 ## Changelog 📋
+
+### 1.3.0
+
+* Decode the telemetry sensors: vario, baro altitude, GPS time, airspeed, RPM,
+  temperature, cells and voltage array, and link statistics Rx and Tx
+* Link statistics reported uplink TX power as the raw table index, so an index of 3
+  displayed as 3 mW where it means 100 mW
 
 ### 1.2.0
 

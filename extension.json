@@ -2,7 +2,7 @@
   "name": "CRSF Frame Parser",
   "apiVersion": "1.0.0",
   "author": "3djc (Original code by : Max Gröning and Ansh Chawla)",
-  "version": "1.2.0",
+  "version": "1.3.0",
   "description": "Crossfire decoder for R/C protocol as used by TBS Crossfire, Tracer or ExpressLRS",
   "extensions": {
     "CRSF Frame Parser": {
