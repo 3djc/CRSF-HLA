@@ -77,6 +77,11 @@ def build_rc_frame(channels, status=None, addr=0xEE):
     return bytes([addr, len(body) + 1]) + body + bytes([crc8(body)])
 
 
+def build_frame(ftype, payload, addr=0xC8):
+    body = bytes([ftype]) + bytes(payload)
+    return bytes([addr, len(body) + 1]) + body + bytes([crc8(body)])
+
+
 def feed(hla, data):
     """Push raw bytes through the HLA, return the AnalyzerFrames it emits."""
     out = []
@@ -223,9 +228,90 @@ def test_both_units():
     check('Both shows value and us', 'CH1: 992 (1500 us)' in txt, txt[:60])
 
 
+def test_radio_id_sync():
+    """0xC8 sync frame: type 0x3A, sub type 0x10, big endian 100ns units."""
+    # 4000 us interval (250 Hz), -100 us offset
+    payload = bytes([0xEA, 0x00, 0x10]) + (40000).to_bytes(4, 'big') + \
+        (-1000).to_bytes(4, 'big', signed=True)
+    frame = build_frame(0x3A, payload)
+    check('sync: frame is 15 bytes', len(frame) == 15, str(len(frame)))
+    check('sync: length byte is 13', frame[1] == 13, str(frame[1]))
+
+    frames = feed(new_hla(), frame)
+    pay = [f for f in frames if f.type == 'crsf_payload']
+    crc = [f for f in frames if f.type == 'crsf_CRC']
+    check('sync: CRC passes', crc and crc[0].data['crccheck'] == 'Pass')
+    txt = pay[0].data['payload'] if pay else '(none)'
+    check('sync: not reported as an error',
+          'Error in Type' not in txt and not pay[0].data.get('error'), txt[:70])
+    check('sync: interval decoded', 'interval 4000.0 us' in txt, txt[:90])
+    check('sync: rate decoded', '250.0 Hz' in txt, txt[:90])
+    check('sync: offset decoded', 'offset -100.0 us' in txt, txt[:90])
+    check('sync: destination decoded', 'Radio Transmitter' in txt, txt[:90])
+
+
+def test_gps_big_endian():
+    payload = (488584000).to_bytes(4, 'big', signed=True) + \
+        (22945000).to_bytes(4, 'big', signed=True) + \
+        (123).to_bytes(2, 'big') + (18000).to_bytes(2, 'big') + \
+        (1500).to_bytes(2, 'big') + bytes([12])
+    frames = feed(new_hla(), build_frame(0x02, payload))
+    txt = [f for f in frames if f.type == 'crsf_payload'][0].data['payload']
+    check('gps: latitude', '48.8584' in txt, txt[:90])
+    check('gps: longitude', '2.2945' in txt, txt[:90])
+    check('gps: ground speed', '12.3' in txt, txt[:110])
+    check('gps: heading', '180.0' in txt, txt[:130])
+    check('gps: altitude', '500m' in txt, txt[-60:])
+    check('gps: satellites', '12' in txt, txt[-30:])
+
+
+def test_gps_negative_coordinates():
+    """Southern/western hemispheres need correct sign handling."""
+    payload = (-338523000).to_bytes(4, 'big', signed=True) + \
+        (-704279000).to_bytes(4, 'big', signed=True) + \
+        (0).to_bytes(2, 'big') + (0).to_bytes(2, 'big') + \
+        (1000).to_bytes(2, 'big') + bytes([7])
+    frames = feed(new_hla(), build_frame(0x02, payload))
+    txt = [f for f in frames if f.type == 'crsf_payload'][0].data['payload']
+    check('gps: negative latitude', '-33.8523' in txt, txt[:90])
+    check('gps: negative longitude', '-70.4279' in txt, txt[:90])
+
+
+def test_attitude_big_endian():
+    payload = (1000).to_bytes(2, 'big', signed=True) + \
+        (-2000).to_bytes(2, 'big', signed=True) + \
+        (31415).to_bytes(2, 'big', signed=True)
+    frames = feed(new_hla(), build_frame(0x1E, payload))
+    txt = [f for f in frames if f.type == 'crsf_payload'][0].data['payload']
+    check('attitude: pitch 0.1 rad', '0.1' in txt, txt[:80])
+    check('attitude: roll -0.2 rad', '-0.2' in txt, txt[:80])
+    check('attitude: yaw 3.1415 rad', '3.1415' in txt, txt[:80])
+
+
+def test_heart_beat_address():
+    frames = feed(new_hla(), build_frame(0x0B, bytes([0x00, 0xC8])))
+    f = [x for x in frames if x.type == 'crsf_payload'][0]
+    check('heartbeat: device resolved', 'Flight Controller' in f.data['payload'],
+          f.data['payload'])
+    check('heartbeat: no unknown-device error', not f.data.get('error'),
+          repr(f.data.get('error')))
+
+
+def test_undecoded_type_is_not_an_error():
+    frames = feed(new_hla(), build_frame(0x0C, bytes([0x00, 0x01, 0x02, 0x03])))
+    f = [x for x in frames if x.type == 'crsf_payload'][0]
+    check('undecoded type names the frame', 'RPM' in f.data['payload'],
+          f.data['payload'])
+    check('undecoded type is not flagged as an error', not f.data.get('error'),
+          repr(f.data.get('error')))
+
+
 for t in (test_16ch_plain, test_16ch_status, test_32ch, test_frame_length_byte,
           test_bad_crc, test_signed_helpers, test_back_to_back, test_us_units,
-          test_legacy_unit_setting, test_both_units):
+          test_legacy_unit_setting, test_both_units, test_radio_id_sync,
+          test_gps_big_endian, test_gps_negative_coordinates,
+          test_attitude_big_endian, test_heart_beat_address,
+          test_undecoded_type_is_not_an_error):
     print(t.__name__ + ':')
     t()
 

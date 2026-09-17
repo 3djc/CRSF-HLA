@@ -348,7 +348,7 @@ class Hla(HighLevelAnalyzer):
                         })
                     elif self.crsf_frame_type == 0x10:  # OpenTX sync
                         analyzerframe = AnalyzerFrame('crsf_payload', self.crsf_payload_start, self.crsf_payload_end, {
-                            'payload': "Open Tx sync packet not yet implemented"
+                            'payload': "Sync frame, normally carried inside a Radio ID (0x3A) frame"
                         })
                         # ToDo
                         # 4 bytes - Adjusted Refresh Rate
@@ -378,30 +378,20 @@ class Hla(HighLevelAnalyzer):
                         # uint16_t    GPS heading ( degree / 100 )
                         # uint16      Altitude ( meter ­1000m offset )
                         # uint8_t     Satellites in use ( counter )
-                        bin_str = ''
-                        for i in self.crsf_payload:
-                            # Format as bits and reverse order
-                            # bcz transmitted data is little endian
-                            bin_str += format(i, '08b')[::-1]
-                        latitude = self.unsigned_to_signed_32(
-                            int(bin_str[0:32][::-1], 2))
-                        longitude = self.unsigned_to_signed_32(
-                            int(bin_str[32:64][::-1], 2))
-                        groundspeed = int(bin_str[64:80][::-1], 2)
-                        gps_heading = int(bin_str[80:96][::-1], 2)
-                        gps_altitude = int(bin_str[96:112][::-1], 2)
-                        satellities = int(bin_str[112:120][::-1], 2)
+                        d = bytes(self.crsf_payload)
+                        latitude = int.from_bytes(d[0:4], 'big', signed=True)
+                        longitude = int.from_bytes(d[4:8], 'big', signed=True)
+                        groundspeed = int.from_bytes(d[8:10], 'big')
+                        gps_heading = int.from_bytes(d[10:12], 'big')
+                        gps_altitude = int.from_bytes(d[12:14], 'big')
+                        satellities = d[14]
                         return AnalyzerFrame('crsf_payload', self.crsf_payload_start, self.crsf_payload_end, {
                             'payload': f'Latitude (degrees): {latitude/1e7} ,Longitude (degrees): {longitude/1e7} ,Ground Speed (Km/h): {groundspeed/10} , Gps Heading (Degree): {gps_heading/100} ,Gps altitude: {gps_altitude-1000}m ,Satellites :{satellities}',
-                            'error': "development pending"})
+                            'error': ""})
                     elif self.crsf_frame_type == 0x0B:  # HEART BEAT
                         # https://github.com/betaflight/betaflight/blob/master/src/main/telemetry/crsf.c#L288
-                        bin_str = ''
-                        for i in self.crsf_payload:
-                            # Format as bits and reverse order
-                            # bcz transmitted data is little endian
-                            bin_str += format(i, '08b')[::-1]
-                        address = int(bin_str[0:16][::-1], 2)
+                        address = int.from_bytes(
+                            bytes(self.crsf_payload[0:2]), 'big')
                         if address in self.CRSF_ADDRESSES_BY_INT.keys():
                             return AnalyzerFrame('crsf_payload', self.crsf_payload_start, self.crsf_payload_end, {
                                 'payload': f'Origin: {self.CRSF_ADDRESSES_BY_INT[address]}',
@@ -429,24 +419,10 @@ class Hla(HighLevelAnalyzer):
 
                     elif self.crsf_frame_type == 0x1E:  # Attitude
                         # https://github.com/betaflight/betaflight/blob/master/src/main/telemetry/crsf.c#L337
-                        bin_str = ''
-                        for i in self.crsf_payload:
-                            # Format as bits and reverse order
-                            # bcz transmitted data is little endian
-                            # eg bits received are in order 7 6 5 4 3 2 1 0, 15 14 13 12 11 10 9 8  in self.crsf_payload
-                            # now in for loop we reverse every byte
-                            # so now bits are 0 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15
-                            # so now have to reverse the list containing both bytes
-                            # then bit order = 15 14 13 12 11 10 9 8 7 6 5 4 3 2 1 0
-                            bin_str += format(i, '08b')[::-1]
-
-                        pitch = bin_str[0:16][::-1]
-                        roll = bin_str[16:32][::-1]
-                        yaw = bin_str[32:48][::-1]  # but this is unsigned
-
-                        pitch = self.unsigned_to_signed_16(int(pitch, 2))/10000
-                        roll = self.unsigned_to_signed_16(int(roll, 2))/10000
-                        yaw = self.unsigned_to_signed_16(int(yaw, 2))/10000
+                        d = bytes(self.crsf_payload)
+                        pitch = int.from_bytes(d[0:2], 'big', signed=True) / 10000
+                        roll = int.from_bytes(d[2:4], 'big', signed=True) / 10000
+                        yaw = int.from_bytes(d[4:6], 'big', signed=True) / 10000
                         return AnalyzerFrame('crsf_payload', self.crsf_payload_start, self.crsf_payload_end, {
                             'payload': f'Pitch(rad): {pitch} ,Roll(rad): {roll} ,Yaw(rad): {yaw}',
                             'error': ""})
@@ -466,6 +442,33 @@ class Hla(HighLevelAnalyzer):
                         return AnalyzerFrame('crsf_payload', self.crsf_payload_start, self.crsf_payload_end, {
                             'payload': f'Destination: {format(dest,"#x")} ,Origin: {format(origin,"#x")} ,Device Name: {device_name} ,Device info parameter count: {device_info_paramter_count} ,Device info paramter version: {device_info_paramter_version}',
                             'error': ""})
+                    elif self.crsf_frame_type == 0x3A:  # Radio ID
+                        # Extended header frame: destination, origin, sub type.
+                        # Sub type 0x10 is the timing correction frame, holding
+                        # a uint32 update interval and an int32 offset, both big
+                        # endian and in 100ns units.
+                        d = bytes(self.crsf_payload)
+                        dest = self.CRSF_ADDRESSES_BY_INT.get(
+                            d[0], format(d[0], '#x')) if len(d) > 0 else '?'
+                        origin = self.CRSF_ADDRESSES_BY_INT.get(
+                            d[1], format(d[1], '#x')) if len(d) > 1 else '?'
+                        if len(d) >= 11 and d[2] == 0x10:
+                            interval_us = int.from_bytes(
+                                d[3:7], 'big', signed=True) / 10
+                            offset_us = int.from_bytes(
+                                d[7:11], 'big', signed=True) / 10
+                            rate = 1000000 / interval_us if interval_us else 0
+                            payload_str = (
+                                'Sync: destination {} ,origin {} ,interval {} us'
+                                ' ({} Hz) ,offset {} us').format(
+                                    dest, origin, round(interval_us, 1),
+                                    round(rate, 1), round(offset_us, 1))
+                        else:
+                            payload_str = 'Radio ID: destination {} ,origin {}'.format(
+                                dest, origin)
+                        analyzerframe = AnalyzerFrame('crsf_payload', self.crsf_payload_start, self.crsf_payload_end, {
+                            'payload': payload_str
+                        })
                     elif self.crsf_frame_type == 0x16:  # RC channels packed
                         # 11 bits per channel, 16 channels per block (22 bytes).
                         # EdgeTX appends a status byte after the first block and,
@@ -499,10 +502,12 @@ class Hla(HighLevelAnalyzer):
                         analyzerframe = AnalyzerFrame('crsf_payload', self.crsf_payload_start, self.crsf_payload_end, {
                             'payload': payload_str
                         })
-                    else:  # unrecognised Packet type
+                    else:  # recognised type, no payload decoder yet
                         analyzerframe = AnalyzerFrame('crsf_payload', self.crsf_payload_start, self.crsf_payload_end, {
-                            'payload': "Error in Type of Packet or not CRSF or not implemented",
-                            'error': "couldn't decode packet"})
+                            'payload': '{}: payload not decoded'.format(
+                                self.frame_types.get(self.crsf_frame_type,
+                                                     'Unknown')),
+                            'error': ""})
 
                     return analyzerframe
                 elif self.crsf_frame_current_index == (self.crsf_frame_length - 1):

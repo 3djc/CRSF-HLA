@@ -33,10 +33,12 @@ Full decoding of:
 * Ping (0x28)
 * Attitude (0x1E)
 * Device info (0x29)
+* Radio ID (0x3A), including the timing sync sub frame
 
-OpenTX/EdgeTX sync (0x10) is recognised but its payload is not decoded yet. A further 22
-frame types are named in the type table, so they are reported by name with the payload
-left undecoded.
+The standalone sync type (0x10) is recognised but not decoded; in practice the sync is
+carried inside a Radio ID (0x3A) frame, which is decoded. A further 21 frame types are
+named in the type table, so they are reported by name with the payload left undecoded
+and no error flagged.
 
 It also provides:
 
@@ -77,6 +79,14 @@ It covers 16 and 32 channel frames, the status byte, CRC pass and fail, unit sel
 and back to back frames.
 
 ## Changelog 📋
+
+### 1.2.0
+
+* Decode Radio ID (0x3A), the frame that carries the ELRS/EdgeTX timing sync: update
+  interval, resulting rate and offset. These were previously reported as a decode error
+* GPS, attitude and heart beat were read little endian; CRSF telemetry is big endian, so
+  every one of those fields was byte swapped
+* A recognised frame type with no decoder is no longer reported as an error
 
 ### 1.1.0
 
