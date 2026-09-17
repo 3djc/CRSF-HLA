@@ -33,7 +33,7 @@ Full decoding of:
 * Heart beat (0x0B)
 * Ping (0x28)
 * Attitude (0x1E)
-* Device info (0x29)
+* Device info (0x29), with serial, hardware and software versions
 * Radio ID (0x3A), including the timing sync sub frame
 * Vario (0x07)
 * Baro altitude (0x09), both encodings, with TBS or ELRS vario when present
@@ -99,6 +99,9 @@ and back to back frames.
 * Decode Command (0x32), which carries the model ID frame the radio sends at startup,
   and the bind command. A command frame holds a second CRC, over the command itself and
   using polynomial 0xBA, which is now checked separately from the frame CRC
+* Device info (0x29) now reports the serial number, hardware and software versions,
+  field count and parameter version, and flags a module that identifies itself as ELRS.
+  Only the name, field count and parameter version were decoded before
 
 ### 1.4.0
 

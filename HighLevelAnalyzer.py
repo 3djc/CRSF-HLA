@@ -470,20 +470,45 @@ class Hla(HighLevelAnalyzer):
                             'payload': f'Pitch(rad): {pitch} ,Roll(rad): {roll} ,Yaw(rad): {yaw}',
                             'error': ""})
                     elif self.crsf_frame_type == 0x29:  # Device info
-                        # https://github.com/betaflight/betaflight/blob/master/src/main/telemetry/crsf.c#L412
-
-                        dest = self.crsf_payload[0]
-                        origin = self.crsf_payload[1]
-                        index = 2
-                        device_name = ''
-                        while index < len(self.crsf_payload) and self.crsf_payload[index] != 0:
-                            device_name += chr(self.crsf_payload[index])
-                            index = index+1
-                        index = index + 12 + 1  # 12 null bytes are sent after null terminated string
-                        device_info_paramter_count = self.crsf_payload[index]
-                        device_info_paramter_version = self.crsf_payload[index+1]
-                        return AnalyzerFrame('crsf_payload', self.crsf_payload_start, self.crsf_payload_end, {
-                            'payload': f'Destination: {format(dest,"#x")} ,Origin: {format(origin,"#x")} ,Device Name: {device_name} ,Device info parameter count: {device_info_paramter_count} ,Device info paramter version: {device_info_paramter_version}',
+                        # destination, origin, a null terminated name, then
+                        # uint32 serial, hardware version and software version,
+                        # a field count and a parameter version. ELRS reports
+                        # "ELRS" as its serial number and puts its version in
+                        # bytes 1 to 3 of the software word. See EdgeTX
+                        # radio/src/telemetry/crossfire.cpp
+                        d = bytes(self.crsf_payload)
+                        dest = self.CRSF_ADDRESSES_BY_INT.get(
+                            d[0], format(d[0], '#x')) if len(d) > 0 else '?'
+                        origin = self.CRSF_ADDRESSES_BY_INT.get(
+                            d[1], format(d[1], '#x')) if len(d) > 1 else '?'
+                        end = d.find(0, 2)
+                        if end < 0:
+                            end = len(d)
+                        name = d[2:end].decode('ascii', 'replace')
+                        i = end + 1
+                        serial = d[i:i + 4]
+                        hardware = d[i + 4:i + 8]
+                        software = d[i + 8:i + 12]
+                        payload_str = 'Device info: {} ,destination {} ,origin {}'.format(
+                            name, dest, origin)
+                        if len(serial) == 4:
+                            printable = all(32 <= b < 127 for b in serial)
+                            payload_str += ' ,serial {}'.format(
+                                serial.decode('ascii') if printable
+                                else '0x' + serial.hex())
+                        if len(hardware) == 4:
+                            payload_str += ' ,hardware 0x{}'.format(hardware.hex())
+                        if len(software) == 4:
+                            payload_str += ' ,software {}.{}.{}'.format(
+                                software[1], software[2], software[3])
+                        if len(d) > i + 12:
+                            payload_str += ' ,fields {}'.format(d[i + 12])
+                        if len(d) > i + 13:
+                            payload_str += ' ,parameter version {}'.format(d[i + 13])
+                        if serial == b'ELRS':
+                            payload_str += ' (ELRS)'
+                        analyzerframe = AnalyzerFrame('crsf_payload', self.crsf_payload_start, self.crsf_payload_end, {
+                            'payload': payload_str,
                             'error': ""})
                     elif self.crsf_frame_type == 0x07:  # Vario
                         # int16 vertical speed in cm/s

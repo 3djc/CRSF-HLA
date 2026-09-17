@@ -551,6 +551,49 @@ def test_command_crc_failure_is_reported():
           repr(pay.data.get('error')))
 
 
+def build_device_info_frame(name=b'Nomad', serial=b'ELRS',
+                            hardware=bytes([0, 0, 0, 1]),
+                            software=bytes([0, 4, 1, 0]),
+                            fields=12, param_version=0):
+    payload = bytes([0xEA, 0xEE]) + name + b'\x00' + serial + hardware + \
+        software + bytes([fields, param_version])
+    return build_frame(0x29, payload, addr=0xC8)
+
+
+def test_device_info():
+    frame = build_device_info_frame()
+    # EdgeTX derives the name length as len - 18
+    name_size = frame[1] - 18
+    check('device info: name size matches len - 18',
+          name_size == len(b'Nomad') + 1, str(name_size))
+
+    frames = feed(new_hla(), frame)
+    pay = [f for f in frames if f.type == 'crsf_payload']
+    crc = [f for f in frames if f.type == 'crsf_CRC']
+    check('device info: CRC passes', crc and crc[0].data['crccheck'] == 'Pass')
+    txt = pay[0].data['payload']
+    check('device info: name', 'Nomad' in txt, txt)
+    check('device info: serial as text', 'serial ELRS' in txt, txt)
+    check('device info: flagged as ELRS', '(ELRS)' in txt, txt)
+    check('device info: software version 4.1.0', 'software 4.1.0' in txt, txt)
+    check('device info: hardware version', 'hardware 0x00000001' in txt, txt)
+    check('device info: field count', 'fields 12' in txt, txt)
+    check('device info: parameter version', 'parameter version 0' in txt, txt)
+    check('device info: no error', not pay[0].data.get('error'),
+          repr(pay[0].data.get('error')))
+
+
+def test_device_info_non_elrs():
+    frames = feed(new_hla(), build_device_info_frame(
+        name=b'TBS CROSSFIRE TX', serial=bytes([0x00, 0x11, 0x22, 0x33]),
+        software=bytes([0, 6, 0, 7])))
+    txt = [f for f in frames if f.type == 'crsf_payload'][0].data['payload']
+    check('device info: non ELRS name', 'TBS CROSSFIRE TX' in txt, txt)
+    check('device info: binary serial as hex', 'serial 0x00112233' in txt, txt)
+    check('device info: not flagged as ELRS', '(ELRS)' not in txt, txt)
+    check('device info: software 6.0.7', 'software 6.0.7' in txt, txt)
+
+
 for t in (test_16ch_plain, test_16ch_status, test_32ch, test_frame_length_byte,
           test_bad_crc, test_signed_helpers, test_back_to_back, test_us_units,
           test_legacy_unit_setting, test_both_units, test_radio_id_sync,
@@ -565,7 +608,8 @@ for t in (test_16ch_plain, test_16ch_status, test_32ch, test_frame_length_byte,
           test_subset_rc_all_resolutions, test_subset_rc_start_channel,
           test_subset_rc_raw_units, test_subset_rc_does_not_break_sync,
           test_model_id_frame, test_bind_frame,
-          test_command_crc_failure_is_reported):
+          test_command_crc_failure_is_reported, test_device_info,
+          test_device_info_non_elrs):
     print(t.__name__ + ':')
     t()
 
