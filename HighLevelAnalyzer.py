@@ -238,7 +238,7 @@ class Hla(HighLevelAnalyzer):
                 self.crsf_new_packet_start = frame.start_time
                 self.dec_fsm = self.dec_fsm_e.Length
                 dest = self.CRSF_ADDRESSES[frame.data['data']]
-                return AnalyzerFrame('crsf_address_byte', frame.start_time, frame.end_time, {'address': f"{format(int.from_bytes(frame.data['data'] ,byteorder='little'),'#x')}",
+                return AnalyzerFrame('crsf_address_byte', frame.start_time, frame.end_time, {'address': f"{format(int.from_bytes(frame.data['data'], byteorder='little'),'#x')}",
                                                                                              'destination': f"{dest}"})
 
             # Length
@@ -359,7 +359,7 @@ class Hla(HighLevelAnalyzer):
                         Capacity = int(bin_str[32:56], 2)
                         # 1 byte  - Remaining (%)
                         Battery_percentage = int(bin_str[56:64],2)
-                        payload_str = f"Voltage: {'%.2f' % Voltage}V ,Current: {'%.2f' % Current}A ,Capacity: {'%.2f' % Capacity}mAh ,Battery %: {'%.2f' % Battery_percentage}"
+                        payload_str = f"Voltage: {'%.2f' % Voltage}V, Current: {'%.2f' % Current}A, Capacity: {'%.2f' % Capacity}mAh, Battery %: {'%.2f' % Battery_percentage}"
                         analyzerframe = AnalyzerFrame('crsf_payload', self.crsf_payload_start, self.crsf_payload_end, {
                             'payload': payload_str
                         })
@@ -429,7 +429,7 @@ class Hla(HighLevelAnalyzer):
                         gps_altitude = int.from_bytes(d[12:14], 'big')
                         satellities = d[14]
                         return AnalyzerFrame('crsf_payload', self.crsf_payload_start, self.crsf_payload_end, {
-                            'payload': f'Latitude (degrees): {latitude/1e7} ,Longitude (degrees): {longitude/1e7} ,Ground Speed (Km/h): {groundspeed/10} , Gps Heading (Degree): {gps_heading/100} ,Gps altitude: {gps_altitude-1000}m ,Satellites :{satellities}',
+                            'payload': f'Latitude (degrees): {latitude/1e7}, Longitude (degrees): {longitude/1e7}, Ground Speed (Km/h): {groundspeed/10}, Gps Heading (Degree): {gps_heading/100}, Gps altitude: {gps_altitude-1000}m, Satellites: {satellities}',
                             'error': ""})
                     elif self.crsf_frame_type == 0x0B:  # HEART BEAT
                         # https://github.com/betaflight/betaflight/blob/master/src/main/telemetry/crsf.c#L288
@@ -451,12 +451,12 @@ class Hla(HighLevelAnalyzer):
                         src_address = self.crsf_payload[1]
                         if src_address in self.CRSF_ADDRESSES_BY_INT.keys() and dest_address in self.CRSF_ADDRESSES_BY_INT.keys():
                             return AnalyzerFrame('crsf_payload', self.crsf_payload_start, self.crsf_payload_end, {
-                                'payload': f'Destination: {self.CRSF_ADDRESSES_BY_INT[dest_address]} ,Origin: {self.CRSF_ADDRESSES_BY_INT[src_address]}',
+                                'payload': f'Destination: {self.CRSF_ADDRESSES_BY_INT[dest_address]}, Origin: {self.CRSF_ADDRESSES_BY_INT[src_address]}',
                                 'error': "",
                                 'destination': f'{format(dest_address, "#x")}'})
                         else:
                             return AnalyzerFrame('crsf_payload', self.crsf_payload_start, self.crsf_payload_end, {
-                                'payload': f'Destination: {format(dest_address, "#x")} ,Origin: {format(src_address, "#x")} (unknown devices)',
+                                'payload': f'Destination: {format(dest_address, "#x")}, Origin: {format(src_address, "#x")} (unknown devices)',
                                 'error': "Unknown device",
                                 'destination': f'{format(dest_address, "#x")}'})
 
@@ -467,7 +467,7 @@ class Hla(HighLevelAnalyzer):
                         roll = int.from_bytes(d[2:4], 'big', signed=True) / 10000
                         yaw = int.from_bytes(d[4:6], 'big', signed=True) / 10000
                         return AnalyzerFrame('crsf_payload', self.crsf_payload_start, self.crsf_payload_end, {
-                            'payload': f'Pitch(rad): {pitch} ,Roll(rad): {roll} ,Yaw(rad): {yaw}',
+                            'payload': f'Pitch(rad): {pitch}, Roll(rad): {roll}, Yaw(rad): {yaw}',
                             'error': ""})
                     elif self.crsf_frame_type == 0x29:  # Device info
                         # destination, origin, a null terminated name, then
@@ -489,22 +489,22 @@ class Hla(HighLevelAnalyzer):
                         serial = d[i:i + 4]
                         hardware = d[i + 4:i + 8]
                         software = d[i + 8:i + 12]
-                        payload_str = 'Device info: {} ,destination {} ,origin {}'.format(
+                        payload_str = 'Device info: {}, destination {}, origin {}'.format(
                             name, dest, origin)
                         if len(serial) == 4:
                             printable = all(32 <= b < 127 for b in serial)
-                            payload_str += ' ,serial {}'.format(
+                            payload_str += ', serial {}'.format(
                                 serial.decode('ascii') if printable
                                 else '0x' + serial.hex())
                         if len(hardware) == 4:
-                            payload_str += ' ,hardware 0x{}'.format(hardware.hex())
+                            payload_str += ', hardware 0x{}'.format(hardware.hex())
                         if len(software) == 4:
-                            payload_str += ' ,software {}.{}.{}'.format(
+                            payload_str += ', software {}.{}.{}'.format(
                                 software[1], software[2], software[3])
                         if len(d) > i + 12:
-                            payload_str += ' ,fields {}'.format(d[i + 12])
+                            payload_str += ', fields {}'.format(d[i + 12])
                         if len(d) > i + 13:
-                            payload_str += ' ,parameter version {}'.format(d[i + 13])
+                            payload_str += ', parameter version {}'.format(d[i + 13])
                         if serial == b'ELRS':
                             payload_str += ' (ELRS)'
                         analyzerframe = AnalyzerFrame('crsf_payload', self.crsf_payload_start, self.crsf_payload_end, {
@@ -543,11 +543,11 @@ class Hla(HighLevelAnalyzer):
                             sign = -1 if v < 0 else 1
                             # exponential scale, see EdgeTX crossfire.cpp
                             vspd = ((math.exp(abs(v) * 0.026) - 1) * 100) * sign
-                            payload_str += ' ,Vertical speed: {} m/s'.format(
+                            payload_str += ', Vertical speed: {} m/s'.format(
                                 round(vspd / 100, 2))
                         elif len(d) > 3:
                             vspd = int.from_bytes(d[2:4], 'big', signed=True)
-                            payload_str += ' ,Vertical speed: {} m/s'.format(
+                            payload_str += ', Vertical speed: {} m/s'.format(
                                 vspd / 100)
                         analyzerframe = AnalyzerFrame('crsf_payload', self.crsf_payload_start, self.crsf_payload_end, {
                             'payload': payload_str
@@ -594,21 +594,21 @@ class Hla(HighLevelAnalyzer):
                     elif self.crsf_frame_type == 0x1C:  # Link statistics Rx
                         d = bytes(self.crsf_payload)
                         analyzerframe = AnalyzerFrame('crsf_payload', self.crsf_payload_start, self.crsf_payload_end, {
-                            'payload': ('Downlink RSSI: -{} dB ,RSSI: {}% ,'
-                                        'Link Quality: {}% ,SNR: {} dB ,'
+                            'payload': ('Downlink RSSI: -{} dB, RSSI: {}%, '
+                                        'Link Quality: {}%, SNR: {} dB, '
                                         'Uplink power: {} dBm').format(
                                 d[0], d[1], d[2],
                                 self.unsigned_to_signed_8(d[3]), d[4])
                         })
                     elif self.crsf_frame_type == 0x1D:  # Link statistics Tx
                         d = bytes(self.crsf_payload)
-                        payload_str = ('Uplink RSSI: -{} dB ,RSSI: {}% ,'
-                                       'Link Quality: {}% ,SNR: {} dB ,'
+                        payload_str = ('Uplink RSSI: -{} dB, RSSI: {}%, '
+                                       'Link Quality: {}%, SNR: {} dB, '
                                        'Downlink power: {} dBm').format(
                             d[0], d[1], d[2],
                             self.unsigned_to_signed_8(d[3]), d[4])
                         if len(d) >= 6:
-                            payload_str += ' ,Uplink rate: {} Hz'.format(d[5] * 10)
+                            payload_str += ', Uplink rate: {} Hz'.format(d[5] * 10)
                         analyzerframe = AnalyzerFrame('crsf_payload', self.crsf_payload_start, self.crsf_payload_end, {
                             'payload': payload_str
                         })
@@ -632,7 +632,7 @@ class Hla(HighLevelAnalyzer):
                                 what = 'CRSF command {}'.format(
                                     format(cmd, '#x') if cmd is not None else '?')
                         else:
-                            what = 'Realm {} ,command {}'.format(
+                            what = 'Realm {}, command {}'.format(
                                 format(realm, '#x') if realm is not None else '?',
                                 format(cmd, '#x') if cmd is not None else '?')
                         # the command CRC is the last payload byte and covers
@@ -640,7 +640,7 @@ class Hla(HighLevelAnalyzer):
                         cmd_crc = self.calCRC(
                             packet=[self.crsf_frame_type] + list(d),
                             bytes=len(d) + 1, gen_poly=0xBA)
-                        payload_str = ('{} ,destination {} ,origin {} ,'
+                        payload_str = ('{}, destination {}, origin {}, '
                                        'command CRC {}').format(
                             what, dest, origin,
                             'Pass' if cmd_crc == 0 else 'Fail')
@@ -683,12 +683,12 @@ class Hla(HighLevelAnalyzer):
                                 d[7:11], 'big', signed=True) / 10
                             rate = 1000000 / interval_us if interval_us else 0
                             payload_str = (
-                                'Sync: destination {} ,origin {} ,interval {} us'
-                                ' ({} Hz) ,offset {} us').format(
+                                'Sync: destination {}, origin {}, interval {} us'
+                                ' ({} Hz), offset {} us').format(
                                     dest, origin, round(interval_us, 1),
                                     round(rate, 1), round(offset_us, 1))
                         else:
-                            payload_str = 'Radio ID: destination {} ,origin {}'.format(
+                            payload_str = 'Radio ID: destination {}, origin {}'.format(
                                 dest, origin)
                         analyzerframe = AnalyzerFrame('crsf_payload', self.crsf_payload_start, self.crsf_payload_end, {
                             'payload': payload_str
