@@ -78,7 +78,7 @@ class Hla(HighLevelAnalyzer):
         0x7A: 'MSP request',
         0x7B: 'MSP respond',
         0x7C: 'MSP Write',
-        0x80: 'Arduipilot respond'
+        0x80: 'ArduPilot respond'
     }  # Extended Header Frames, range: 0x28 to 0x96
 
     # https://github.com/ExpressLRS/ExpressLRS/blob/master/src/lib/CrsfProtocol/crsf_protocol.h#L108
