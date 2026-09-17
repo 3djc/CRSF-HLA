@@ -25,6 +25,7 @@ Baud rate is 420000 on TBS Crossfire. EdgeTX defaults to 400000 and can be set t
 Full decoding of:
 
 * RC channels packed (0x16), both 16 and 32 channel frames
+* Subset RC channels packed (0x17), all four resolutions
 * Link statistics (0x14)
 * Battery sensor (0x08)
 * Flight mode (0x21)
@@ -92,6 +93,13 @@ It covers 16 and 32 channel frames, the status byte, CRC pass and fail, unit sel
 and back to back frames.
 
 ## Changelog 📋
+
+### 1.4.0
+
+* Decode subset RC channels packed (0x17) at 10, 11, 12 and 13 bit resolution,
+  honouring the starting channel number. The type was previously unknown, and an
+  unknown type resets the decoder mid frame, which could manufacture bogus frames from
+  the bytes that followed
 
 ### 1.3.0
 

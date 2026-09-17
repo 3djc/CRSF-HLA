@@ -62,6 +62,7 @@ class Hla(HighLevelAnalyzer):
         # no plans of implmenting https://github.com/betaflight/betaflight/blob/master/src/main/rx/crsf.c#L181
         0x1d: 'Link statistics Tx',
         0x16: 'RC channels packed',
+        0x17: 'Subset RC channels packed',
         0x1E: 'Attitude',
         0x21: 'Flight mode',
         0x28: 'Ping devices',
@@ -114,6 +115,15 @@ class Hla(HighLevelAnalyzer):
     # Same table keyed by int, for addresses carried inside a payload
     CRSF_ADDRESSES_BY_INT = {k[0]: v for k, v in CRSF_ADDRESSES.items()}
 
+    # Subset RC (0x17) resolution configuration: bits per channel and the
+    # scale used to convert to microseconds. See Betaflight src/main/rx/crsf.h
+    SUBSET_RC_RES = {
+        0: (10, 1.0),
+        1: (11, 0.5),
+        2: (12, 0.25),
+        3: (13, 0.125),
+    }
+
     # Uplink TX power is sent as an index into this table, in mW
     TX_POWER_MW = [0, 10, 25, 100, 500, 1000, 2000, 250, 50]
 
@@ -163,17 +173,43 @@ class Hla(HighLevelAnalyzer):
             x -= 2**32
         return x
 
-    def unpack_channels(self, data):
+    def unpack_bits(self, data, bits, count=None):
         '''
-        Unpacks 11 bit channel values from a block of bytes (22 bytes -> 16 channels).
+        Unpacks values of the given width, packed LSB first, from a block of bytes.
         '''
         bin_str = ''
         for i in data:
             bin_str += format(i, '08b')[::-1]
-        channels = []
-        for i in range(len(bin_str) // 11):
-            channels.append(int(bin_str[11 * i: 11 * i + 11][::-1], 2))
-        return channels
+        if count is None:
+            count = len(bin_str) // bits
+        values = []
+        for i in range(count):
+            chunk = bin_str[bits * i: bits * (i + 1)]
+            if len(chunk) < bits:
+                break
+            values.append(int(chunk[::-1], 2))
+        return values
+
+    def unpack_channels(self, data):
+        '''
+        Unpacks 11 bit channel values from a block of bytes (22 bytes -> 16 channels).
+        '''
+        return self.unpack_bits(data, 11)
+
+    def format_channel_values(self, pairs, first_channel=1):
+        '''
+        Renders (raw, microseconds) pairs according to the unit setting.
+        '''
+        parts = []
+        for i, (value, value_us) in enumerate(pairs):
+            ch = first_channel + i
+            if self.channel_unit == 'Digital Value':
+                parts.append('CH{}: {}'.format(ch, value))
+            elif self.channel_unit == 'Both':
+                parts.append('CH{}: {} ({} us)'.format(ch, value, value_us))
+            else:
+                parts.append('CH{}: {} us'.format(ch, value_us))
+        return ', '.join(parts)
 
     def describe_arming_status(self, status):
         '''
@@ -551,6 +587,24 @@ class Hla(HighLevelAnalyzer):
                         analyzerframe = AnalyzerFrame('crsf_payload', self.crsf_payload_start, self.crsf_payload_end, {
                             'payload': payload_str
                         })
+                    elif self.crsf_frame_type == 0x17:  # Subset RC channels
+                        # Configuration byte: bits 0-4 the first channel number,
+                        # bits 5-6 the resolution, bit 7 reserved. The channel
+                        # data follows, packed LSB first like 0x16, but scaled
+                        # to microseconds with a 988 offset.
+                        d = bytes(self.crsf_payload)
+                        cfg = d[0]
+                        first = (cfg & 0x1F) + 1
+                        bits, scale = self.SUBSET_RC_RES[(cfg >> 5) & 0x03]
+                        count = ((len(d) - 1) * 8) // bits
+                        values = self.unpack_bits(d[1:], bits, count)
+                        pairs = [(v, int(scale * v + 988)) for v in values]
+                        payload_str = '[{}ch from CH{}, {} bit] '.format(
+                            len(values), first, bits) + \
+                            self.format_channel_values(pairs, first_channel=first)
+                        analyzerframe = AnalyzerFrame('crsf_payload', self.crsf_payload_start, self.crsf_payload_end, {
+                            'payload': payload_str
+                        })
                     elif self.crsf_frame_type == 0x3A:  # Radio ID
                         # Extended header frame: destination, origin, sub type.
                         # Sub type 0x10 is the timing correction frame, holding
@@ -591,20 +645,11 @@ class Hla(HighLevelAnalyzer):
                         if len(data) >= 45:
                             channels += self.unpack_channels(data[23:45])
 
-                        parts = []
-                        for idx, value in enumerate(channels, start=1):
-                            # 'RC' value converted to microseconds
-                            value_us = int((value * 1024 / 1639) + 881)
-                            if self.channel_unit == 'Digital Value':
-                                parts.append('CH{}: {}'.format(idx, value))
-                            elif self.channel_unit == 'Both':
-                                parts.append('CH{}: {} ({} us)'.format(
-                                    idx, value, value_us))
-                            else:
-                                # 'us', and any legacy saved value
-                                parts.append('CH{}: {} us'.format(idx, value_us))
+                        # 'RC' value converted to microseconds
+                        pairs = [(v, int((v * 1024 / 1639) + 881))
+                                 for v in channels]
                         payload_str = '[{}ch] '.format(
-                            len(channels)) + ', '.join(parts)
+                            len(channels)) + self.format_channel_values(pairs)
                         status_str = self.describe_arming_status(status)
                         if status_str:
                             payload_str += ' | ' + status_str

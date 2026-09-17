@@ -82,6 +82,29 @@ def build_frame(ftype, payload, addr=0xC8):
     return bytes([addr, len(body) + 1]) + body + bytes([crc8(body)])
 
 
+def pack_bits(values, bits):
+    """Pack values LSB first at the given width, as CRSF does."""
+    acc = 0
+    nbits = 0
+    out = bytearray()
+    for v in values:
+        acc |= (v & ((1 << bits) - 1)) << nbits
+        nbits += bits
+        while nbits >= 8:
+            out.append(acc & 0xFF)
+            acc >>= 8
+            nbits -= 8
+    if nbits:
+        out.append(acc & 0xFF)
+    return bytes(out)
+
+
+def build_subset_frame(values, bits, start_channel=0):
+    res = {10: 0, 11: 1, 12: 2, 13: 3}[bits]
+    cfg = (start_channel & 0x1F) | (res << 5)
+    return build_frame(0x17, bytes([cfg]) + pack_bits(values, bits))
+
+
 def feed(hla, data):
     """Push raw bytes through the HLA, return the AnalyzerFrames it emits."""
     out = []
@@ -420,6 +443,58 @@ def test_link_statistics_tx_power_table():
     check('link stats: not the raw index', '3 mW' not in txt, txt)
 
 
+def test_subset_rc_11bit():
+    frames = feed(new_hla('us'), build_subset_frame([0, 1024, 2047, 500], 11))
+    pay = [f for f in frames if f.type == 'crsf_payload']
+    crc = [f for f in frames if f.type == 'crsf_CRC']
+    check('subset 11b: CRC passes', crc and crc[0].data['crccheck'] == 'Pass')
+    txt = pay[0].data['payload']
+    check('subset 11b: header', txt.startswith('[4ch from CH1, 11 bit]'), txt[:40])
+    check('subset 11b: centre is 1500 us', 'CH2: 1500 us' in txt, txt[:90])
+    check('subset 11b: minimum is 988 us', 'CH1: 988 us' in txt, txt[:90])
+    check('subset 11b: no error', not pay[0].data.get('error'), txt[:60])
+
+
+def test_subset_rc_all_resolutions():
+    """Each resolution has its own scale; the centre must land on 1500 us."""
+    for bits, centre in ((10, 512), (11, 1024), (12, 2048), (13, 4096)):
+        frames = feed(new_hla('us'), build_subset_frame([centre] * 4, bits))
+        txt = [f for f in frames if f.type == 'crsf_payload'][0].data['payload']
+        check('subset {}b: centre is 1500 us'.format(bits),
+              'CH1: 1500 us' in txt, txt[:60])
+        check('subset {}b: width reported'.format(bits),
+              '{} bit'.format(bits) in txt, txt[:40])
+
+
+def test_subset_rc_start_channel():
+    frames = feed(new_hla('us'), build_subset_frame([1024] * 4, 11,
+                                                    start_channel=8))
+    txt = [f for f in frames if f.type == 'crsf_payload'][0].data['payload']
+    check('subset: starts at CH9', 'from CH9' in txt, txt[:40])
+    check('subset: first value is CH9', 'CH9: 1500 us' in txt, txt[:80])
+    check('subset: last value is CH12', 'CH12: 1500 us' in txt, txt[:120])
+    check('subset: does not start at CH1', 'CH1:' not in txt, txt[:80])
+
+
+def test_subset_rc_raw_units():
+    frames = feed(new_hla('Digital Value'), build_subset_frame([1024, 7], 11))
+    txt = [f for f in frames if f.type == 'crsf_payload'][0].data['payload']
+    check('subset: raw values shown', 'CH1: 1024' in txt and 'CH2: 7' in txt, txt[:80])
+
+
+def test_subset_rc_does_not_break_sync():
+    """Before 0x17 was known it was rejected, resetting the state machine."""
+    a = build_subset_frame([1024] * 4, 11)
+    b = build_rc_frame([992] * 16, status=0x02)
+    frames = feed(new_hla('us'), a + b)
+    crc = [f for f in frames if f.type == 'crsf_CRC']
+    check('subset then 0x16: both frames decode',
+          len(crc) == 2 and all(c.data['crccheck'] == 'Pass' for c in crc),
+          str([c.data['crccheck'] for c in crc]))
+    types = [f.data.get('type') for f in frames if f.type == 'crsf_type_byte']
+    check('subset: type recognised', 'Unrecognised' not in types, str(types))
+
+
 for t in (test_16ch_plain, test_16ch_status, test_32ch, test_frame_length_byte,
           test_bad_crc, test_signed_helpers, test_back_to_back, test_us_units,
           test_legacy_unit_setting, test_both_units, test_radio_id_sync,
@@ -430,7 +505,9 @@ for t in (test_16ch_plain, test_16ch_status, test_32ch, test_frame_length_byte,
           test_baro_with_elrs_vario, test_baro_with_tbs_vario, test_airspeed,
           test_rpm, test_temperature, test_cells, test_voltage_array,
           test_link_statistics_rx, test_link_statistics_tx,
-          test_link_statistics_tx_power_table):
+          test_link_statistics_tx_power_table, test_subset_rc_11bit,
+          test_subset_rc_all_resolutions, test_subset_rc_start_channel,
+          test_subset_rc_raw_units, test_subset_rc_does_not_break_sync):
     print(t.__name__ + ':')
     t()
 
