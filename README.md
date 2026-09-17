@@ -36,7 +36,7 @@ Full decoding of:
 * Radio ID (0x3A), including the timing sync sub frame
 
 The standalone sync type (0x10) is recognised but not decoded; in practice the sync is
-carried inside a Radio ID (0x3A) frame, which is decoded. A further 21 frame types are
+carried inside a Radio ID (0x3A) frame, which is decoded. A further 20 frame types are
 named in the type table, so they are reported by name with the payload left undecoded
 and no error flagged.
 
